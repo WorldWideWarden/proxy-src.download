@@ -520,7 +520,7 @@ func (s *Server) Run() {
 	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename}", getHandlerFn).Methods("GET")
 
 	r.HandleFunc("/{filename}/virustotal", s.virusTotalHandler).Methods("PUT")
-	r.HandleFunc("/{filename}/scan", s.scanHandler).Methods("PUT")
+	r.HandleFunc("/{filename}/scan", s.basicAuthHandler(http.HandlerFunc(s.scanHandler))).Methods("PUT")
 	r.HandleFunc("/put/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
 	r.HandleFunc("/upload/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
 	r.HandleFunc("/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
