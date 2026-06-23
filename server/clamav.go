@@ -50,6 +50,12 @@ func (s *Server) scanHandler(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Printf("Scanning %s %d %s", filename, contentLength, contentType)
 
+	if s.maxUploadSize > 0 && contentLength > s.maxUploadSize {
+		s.logger.Print("Entity too large")
+		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		return
+	}
+
 	file, err := os.CreateTemp(s.tempPath, "clamav-")
 	defer s.cleanTmpFile(file)
 	if err != nil {
@@ -58,10 +64,20 @@ func (s *Server) scanHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = io.Copy(file, r.Body)
+	copyReader := io.Reader(r.Body)
+	if s.maxUploadSize > 0 {
+		copyReader = io.LimitReader(r.Body, s.maxUploadSize+1)
+	}
+
+	n, err := io.Copy(file, copyReader)
 	if err != nil {
 		s.logger.Printf("%s", err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if s.maxUploadSize > 0 && n > s.maxUploadSize {
+		s.logger.Print("Entity too large")
+		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 		return
 	}
 
