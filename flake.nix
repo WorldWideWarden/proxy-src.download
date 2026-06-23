@@ -43,7 +43,7 @@
               tls-cert-file = mkOption { type = types.nullOr types.str; description = "path to tls certificate"; };
               tls-private-key = mkOption { type = types.nullOr types.str; description = "path to tls private key "; };
               http-auth-user = mkOption { type = types.nullOr types.str; description = "user for basic http auth on upload"; };
-              http-auth-pass = mkOption { type = types.nullOr types.str; description = "pass for basic http auth on upload"; };
+              http-auth-pass-file = mkOption { type = types.nullOr types.path; default = null; description = "path to file containing basic auth password for uploads"; };
               http-auth-htpasswd = mkOption { type = types.nullOr types.str; description = "htpasswd file path for basic http auth on upload"; };
               http-auth-ip-whitelist = mkOption { type = types.nullOr types.str; description = "comma separated list of ips allowed to upload without being challenged an http auth"; };
               ip-whitelist = mkOption { type = types.nullOr types.str; description = "comma separated list of ips allowed to connect to the service"; };
@@ -70,8 +70,8 @@
 
                 aws = {
                   enable = mkEnableOption "Enable AWS backend";
-                  aws-access-key = mkOption { type = types.str; description = "aws access key"; };
-                  aws-secret-key = mkOption { type = types.str; description = "aws secret key"; };
+                  aws-access-key-file = mkOption { type = types.nullOr types.path; default = null; description = "path to file containing aws access key"; };
+                  aws-secret-key-file = mkOption { type = types.nullOr types.path; default = null; description = "path to file containing aws secret key"; };
                   bucket = mkOption { type = types.str; description = "aws bucket "; };
                   s3-endpoint = mkOption {
                     type = types.nullOr types.str;
@@ -87,13 +87,13 @@
 
                 storj = {
                   enable = mkEnableOption "Enable storj backend";
-                  storj-access = mkOption { type = types.str; description = "Access for the project"; };
+                  storj-access-file = mkOption { type = types.nullOr types.path; default = null; description = "path to file containing access grant for the project"; };
                   storj-bucket = mkOption { type = types.str; description = "Bucket to use within the project"; };
                 };
 
                 gdrive = {
                   enable = mkEnableOption "Enable gdrive backend";
-                  gdrive-client-json = mkOption { type = types.str; description = "oauth client json config for gdrive provider"; };
+                  gdrive-client-json-file = mkOption { type = types.nullOr types.path; default = null; description = "path to file containing oauth client json config for gdrive provider"; };
                   gdrive-chunk-size = mkOption { default = 8; type = types.nullOr types.int; description = "chunk size for gdrive upload in megabytes, must be lower than available memory (8 MB)"; };
                   basedir = mkOption { type = types.str; description = "path storage for gdrive provider"; default = "${cfg.stateDir}/store"; };
                   purge-interval = mkOption { type = types.nullOr types.int; description = "interval in hours to run the automatic purge for (not applicable to S3 and Storj)"; };
@@ -142,9 +142,9 @@
                       else [ "--${option}" "${cfg.${option}}" ];
 
                   in
-                    lists.flatten (map (mkFlag) (filter (option: cfg.${option} != null && option != "enable") options));
+                    lists.flatten (map (mkFlag) (filter (option: cfg.${option} != null && option != "enable" && !(hasSuffix "-file" option)) options));
 
-                aws-config = (mkFlags cfg.provider.aws (attrNames provider_options)) ++ [ "--provider" "aws" ];
+                aws-config = (mkFlags cfg.provider.aws (attrNames provider_options.aws)) ++ [ "--provider" "aws" ];
                 gdrive-config = mkFlags cfg.provider.gdrive (attrNames provider_options.gdrive) ++ [ "--provider" "gdrive" ];
                 storj-config = mkFlags cfg.provider.storj (attrNames provider_options.storj) ++ [ "--provider" "storj" ];
                 local-config = mkFlags cfg.provider.local (attrNames provider_options.local) ++ [ "--provider" "local" ];
@@ -157,6 +157,25 @@
                   else if !cfg.provider.aws.enable && !cfg.provider.storj.enable && !cfg.provider.gdrive.enable && cfg.provider.local.enable then local-config
                   else throw "transfer.sh requires exactly one provider (aws, storj, gdrive, local)"
                 );
+
+
+                credentialFiles = lists.flatten [
+                  (optional (cfg.http-auth-pass-file != null) "http_auth_pass:${toString cfg.http-auth-pass-file}")
+                  (optional (cfg.provider.aws.aws-access-key-file != null) "aws_access_key:${toString cfg.provider.aws.aws-access-key-file}")
+                  (optional (cfg.provider.aws.aws-secret-key-file != null) "aws_secret_key:${toString cfg.provider.aws.aws-secret-key-file}")
+                  (optional (cfg.provider.storj.storj-access-file != null) "storj_access:${toString cfg.provider.storj.storj-access-file}")
+                  (optional (cfg.provider.gdrive.gdrive-client-json-file != null) "gdrive_client_json:${toString cfg.provider.gdrive.gdrive-client-json-file}")
+                ];
+
+                wrapper = pkgs.writeShellScript "transfer-sh-start" ''
+                  set -eu
+                  ${optionalString (cfg.http-auth-pass-file != null) 'export HTTP_AUTH_PASS="$(< "$CREDENTIALS_DIRECTORY/http_auth_pass")"'}
+                  ${optionalString (cfg.provider.aws.aws-access-key-file != null) 'export AWS_ACCESS_KEY="$(< "$CREDENTIALS_DIRECTORY/aws_access_key")"'}
+                  ${optionalString (cfg.provider.aws.aws-secret-key-file != null) 'export AWS_SECRET_KEY="$(< "$CREDENTIALS_DIRECTORY/aws_secret_key")"'}
+                  ${optionalString (cfg.provider.storj.storj-access-file != null) 'export STORJ_ACCESS="$(< "$CREDENTIALS_DIRECTORY/storj_access")"'}
+                  ${optionalString (cfg.provider.gdrive.gdrive-client-json-file != null) 'export GDRIVE_CLIENT_JSON="$(< "$CREDENTIALS_DIRECTORY/gdrive_client_json")"'}
+                  exec ${transfer-sh pkgs}/bin/transfer.sh ${general-config} ${provider-config}
+                '';
 
               in
                 lib.mkIf cfg.enable
@@ -172,7 +191,8 @@
                       serviceConfig = {
                         User = cfg.user;
                         Group = cfg.group;
-                        ExecStart = "${transfer-sh pkgs}/bin/transfer.sh ${general-config} ${provider-config} ";
+                        ExecStart = wrapper;
+                        LoadCredential = credentialFiles;
                       };
                     };
 
